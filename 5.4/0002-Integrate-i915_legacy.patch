@@ -1,0 +1,866 @@
+From c9d99b8258ee8c6b3e0610f39c0d530c95e16eab Mon Sep 17 00:00:00 2001
+From: Dorian Stoll <dorian.stoll@tmsp.io>
+Date: Fri, 4 Oct 2019 15:55:46 +0200
+Subject: [PATCH 2/2] Integrate i915_legacy
+
+Based on (upstream): 5.4-rc1
+
+Signed-off-by: Dorian Stoll <dorian.stoll@tmsp.io>
+---
+ drivers/gpu/drm/Kconfig                       |  2 +-
+ drivers/gpu/drm/Makefile                      |  2 +-
+ drivers/gpu/drm/i915_legacy/gvt/dmabuf.c      |  2 +-
+ drivers/gpu/drm/i915_legacy/i915_drv.c        |  2 +-
+ drivers/gpu/drm/i915_legacy/i915_drv.h        |  5 ++--
+ drivers/gpu/drm/i915_legacy/i915_gem.c        | 26 +++++++++----------
+ .../gpu/drm/i915_legacy/i915_gem_batch_pool.c | 12 ++++-----
+ .../gpu/drm/i915_legacy/i915_gem_clflush.c    |  6 ++---
+ .../gpu/drm/i915_legacy/i915_gem_context.c    |  3 ---
+ drivers/gpu/drm/i915_legacy/i915_gem_dmabuf.c |  9 +++----
+ .../gpu/drm/i915_legacy/i915_gem_execbuffer.c |  6 ++---
+ drivers/gpu/drm/i915_legacy/i915_gem_object.h | 12 ++++-----
+ drivers/gpu/drm/i915_legacy/i915_mm.c         |  3 +--
+ drivers/gpu/drm/i915_legacy/i915_request.c    |  4 +--
+ drivers/gpu/drm/i915_legacy/i915_sw_fence.c   |  8 +++---
+ drivers/gpu/drm/i915_legacy/i915_sw_fence.h   |  4 +--
+ drivers/gpu/drm/i915_legacy/i915_trace.h      |  2 +-
+ drivers/gpu/drm/i915_legacy/i915_vma.c        | 20 +++++++-------
+ drivers/gpu/drm/i915_legacy/i915_vma.h        |  2 +-
+ drivers/gpu/drm/i915_legacy/intel_atomic.c    | 23 +++++++++++++---
+ drivers/gpu/drm/i915_legacy/intel_display.c   |  4 +--
+ drivers/gpu/drm/i915_legacy/intel_dp_mst.c    |  7 ++---
+ drivers/gpu/drm/i915_legacy/intel_drv.h       |  2 +-
+ drivers/gpu/drm/i915_legacy/intel_hdcp.c      |  9 ++++---
+ drivers/gpu/drm/i915_legacy/intel_psr.c       |  2 +-
+ drivers/gpu/drm/i915_legacy/intel_sdvo.c      |  9 ++++---
+ drivers/gpu/drm/i915_legacy/intel_sprite.c    |  3 ++-
+ drivers/gpu/drm/i915_legacy/intel_tv.c        |  8 +++---
+ .../i915_legacy/selftests/i915_gem_dmabuf.c   |  8 +++---
+ 29 files changed, 111 insertions(+), 94 deletions(-)
+
+diff --git a/drivers/gpu/drm/Kconfig b/drivers/gpu/drm/Kconfig
+index e67c194c2aca..d091c8de23c3 100644
+--- a/drivers/gpu/drm/Kconfig
++++ b/drivers/gpu/drm/Kconfig
+@@ -243,7 +243,7 @@ source "drivers/gpu/drm/amd/amdgpu/Kconfig"
+ 
+ source "drivers/gpu/drm/nouveau/Kconfig"
+ 
+-source "drivers/gpu/drm/i915/Kconfig"
++source "drivers/gpu/drm/i915_legacy/Kconfig"
+ 
+ config DRM_VGEM
+ 	tristate "Virtual GEM provider"
+diff --git a/drivers/gpu/drm/Makefile b/drivers/gpu/drm/Makefile
+index 82ff826b33cc..3a96b4501540 100644
+--- a/drivers/gpu/drm/Makefile
++++ b/drivers/gpu/drm/Makefile
+@@ -67,7 +67,7 @@ obj-$(CONFIG_DRM_RADEON)+= radeon/
+ obj-$(CONFIG_DRM_AMDGPU)+= amd/amdgpu/
+ obj-$(CONFIG_DRM_MGA)	+= mga/
+ obj-$(CONFIG_DRM_I810)	+= i810/
+-obj-$(CONFIG_DRM_I915)	+= i915/
++obj-$(CONFIG_DRM_I915)	+= i915_legacy/
+ obj-$(CONFIG_DRM_MGAG200) += mgag200/
+ obj-$(CONFIG_DRM_V3D)  += v3d/
+ obj-$(CONFIG_DRM_VC4)  += vc4/
+diff --git a/drivers/gpu/drm/i915_legacy/gvt/dmabuf.c b/drivers/gpu/drm/i915_legacy/gvt/dmabuf.c
+index 41c8ebc60c63..13044c027f27 100644
+--- a/drivers/gpu/drm/i915_legacy/gvt/dmabuf.c
++++ b/drivers/gpu/drm/i915_legacy/gvt/dmabuf.c
+@@ -491,7 +491,7 @@ int intel_vgpu_get_dmabuf(struct intel_vgpu *vgpu, unsigned int dmabuf_id)
+ 
+ 	obj->gvt_info = dmabuf_obj->info;
+ 
+-	dmabuf = i915_gem_prime_export(dev, &obj->base, DRM_CLOEXEC | DRM_RDWR);
++	dmabuf = i915_gem_prime_export(&obj->base, DRM_CLOEXEC | DRM_RDWR);
+ 	if (IS_ERR(dmabuf)) {
+ 		gvt_vgpu_err("export dma-buf failed\n");
+ 		ret = PTR_ERR(dmabuf);
+diff --git a/drivers/gpu/drm/i915_legacy/i915_drv.c b/drivers/gpu/drm/i915_legacy/i915_drv.c
+index d485d49c473b..eb3bb8133ab0 100644
+--- a/drivers/gpu/drm/i915_legacy/i915_drv.c
++++ b/drivers/gpu/drm/i915_legacy/i915_drv.c
+@@ -3161,7 +3161,7 @@ static struct drm_driver driver = {
+ 	 * deal with them for Intel hardware.
+ 	 */
+ 	.driver_features =
+-	    DRIVER_GEM | DRIVER_PRIME |
++	    DRIVER_GEM |
+ 	    DRIVER_RENDER | DRIVER_MODESET | DRIVER_ATOMIC | DRIVER_SYNCOBJ,
+ 	.release = i915_driver_release,
+ 	.open = i915_driver_open,
+diff --git a/drivers/gpu/drm/i915_legacy/i915_drv.h b/drivers/gpu/drm/i915_legacy/i915_drv.h
+index 066fd2a12851..430c3da0e55f 100644
+--- a/drivers/gpu/drm/i915_legacy/i915_drv.h
++++ b/drivers/gpu/drm/i915_legacy/i915_drv.h
+@@ -43,7 +43,7 @@
+ #include <linux/mm_types.h>
+ #include <linux/perf_event.h>
+ #include <linux/pm_qos.h>
+-#include <linux/reservation.h>
++#include <linux/dma-resv.h>
+ #include <linux/shmem_fs.h>
+ #include <linux/stackdepot.h>
+ 
+@@ -3162,8 +3162,7 @@ int i915_gem_object_set_cache_level(struct drm_i915_gem_object *obj,
+ struct drm_gem_object *i915_gem_prime_import(struct drm_device *dev,
+ 				struct dma_buf *dma_buf);
+ 
+-struct dma_buf *i915_gem_prime_export(struct drm_device *dev,
+-				struct drm_gem_object *gem_obj, int flags);
++struct dma_buf *i915_gem_prime_export(struct drm_gem_object *gem_obj, int flags);
+ 
+ static inline struct i915_hw_ppgtt *
+ i915_vm_to_ppgtt(struct i915_address_space *vm)
+diff --git a/drivers/gpu/drm/i915_legacy/i915_gem.c b/drivers/gpu/drm/i915_legacy/i915_gem.c
+index ad01c92aaf74..62355e8166a8 100644
+--- a/drivers/gpu/drm/i915_legacy/i915_gem.c
++++ b/drivers/gpu/drm/i915_legacy/i915_gem.c
+@@ -30,7 +30,7 @@
+ #include <drm/i915_drm.h>
+ #include <linux/dma-fence-array.h>
+ #include <linux/kthread.h>
+-#include <linux/reservation.h>
++#include <linux/dma-resv.h>
+ #include <linux/shmem_fs.h>
+ #include <linux/slab.h>
+ #include <linux/stop_machine.h>
+@@ -445,7 +445,7 @@ i915_gem_object_wait_fence(struct dma_fence *fence,
+ }
+ 
+ static long
+-i915_gem_object_wait_reservation(struct reservation_object *resv,
++i915_gem_object_wait_reservation(struct dma_resv *resv,
+ 				 unsigned int flags,
+ 				 long timeout)
+ {
+@@ -458,7 +458,7 @@ i915_gem_object_wait_reservation(struct reservation_object *resv,
+ 		unsigned int count, i;
+ 		int ret;
+ 
+-		ret = reservation_object_get_fences_rcu(resv,
++		ret = dma_resv_get_fences_rcu(resv,
+ 							&excl, &count, &shared);
+ 		if (ret)
+ 			return ret;
+@@ -487,7 +487,7 @@ i915_gem_object_wait_reservation(struct reservation_object *resv,
+ 		 */
+ 		prune_fences = count && timeout >= 0;
+ 	} else {
+-		excl = reservation_object_get_excl_rcu(resv);
++		excl = dma_resv_get_excl_rcu(resv);
+ 	}
+ 
+ 	if (excl && timeout >= 0)
+@@ -501,10 +501,10 @@ i915_gem_object_wait_reservation(struct reservation_object *resv,
+ 	 * no new fences have been added).
+ 	 */
+ 	if (prune_fences && !__read_seqcount_retry(&resv->seq, seq)) {
+-		if (reservation_object_trylock(resv)) {
++		if (dma_resv_trylock(resv)) {
+ 			if (!__read_seqcount_retry(&resv->seq, seq))
+-				reservation_object_add_excl_fence(resv, NULL);
+-			reservation_object_unlock(resv);
++				dma_resv_add_excl_fence(resv, NULL);
++			dma_resv_unlock(resv);
+ 		}
+ 	}
+ 
+@@ -558,7 +558,7 @@ i915_gem_object_wait_priority(struct drm_i915_gem_object *obj,
+ 		unsigned int count, i;
+ 		int ret;
+ 
+-		ret = reservation_object_get_fences_rcu(obj->resv,
++		ret = dma_resv_get_fences_rcu(obj->resv,
+ 							&excl, &count, &shared);
+ 		if (ret)
+ 			return ret;
+@@ -570,7 +570,7 @@ i915_gem_object_wait_priority(struct drm_i915_gem_object *obj,
+ 
+ 		kfree(shared);
+ 	} else {
+-		excl = reservation_object_get_excl_rcu(obj->resv);
++		excl = dma_resv_get_excl_rcu(obj->resv);
+ 	}
+ 
+ 	if (excl) {
+@@ -3915,7 +3915,7 @@ i915_gem_busy_ioctl(struct drm_device *dev, void *data,
+ {
+ 	struct drm_i915_gem_busy *args = data;
+ 	struct drm_i915_gem_object *obj;
+-	struct reservation_object_list *list;
++	struct dma_resv_list *list;
+ 	unsigned int seq;
+ 	int err;
+ 
+@@ -3938,7 +3938,7 @@ i915_gem_busy_ioctl(struct drm_device *dev, void *data,
+ 	 * Alternatively, we can trade that extra information on read/write
+ 	 * activity with
+ 	 *	args->busy =
+-	 *		!reservation_object_test_signaled_rcu(obj->resv, true);
++	 *		!dma_resv_test_signaled_rcu(obj->resv, true);
+ 	 * to report the overall busyness. This is what the wait-ioctl does.
+ 	 *
+ 	 */
+@@ -4058,7 +4058,7 @@ void i915_gem_object_init(struct drm_i915_gem_object *obj,
+ 
+ 	obj->ops = ops;
+ 
+-	reservation_object_init(&obj->__builtin_resv);
++	dma_resv_init(&obj->__builtin_resv);
+ 	obj->resv = &obj->__builtin_resv;
+ 
+ 	obj->frontbuffer_ggtt_origin = ORIGIN_GTT;
+@@ -4255,7 +4255,7 @@ static void __i915_gem_free_objects(struct drm_i915_private *i915,
+ 		if (obj->base.import_attach)
+ 			drm_prime_gem_destroy(&obj->base, NULL);
+ 
+-		reservation_object_fini(&obj->__builtin_resv);
++		dma_resv_fini(&obj->__builtin_resv);
+ 		drm_gem_object_release(&obj->base);
+ 		i915_gem_info_remove_obj(i915, obj->base.size);
+ 
+diff --git a/drivers/gpu/drm/i915_legacy/i915_gem_batch_pool.c b/drivers/gpu/drm/i915_legacy/i915_gem_batch_pool.c
+index f3890b664e3f..75d8ffbba536 100644
+--- a/drivers/gpu/drm/i915_legacy/i915_gem_batch_pool.c
++++ b/drivers/gpu/drm/i915_legacy/i915_gem_batch_pool.c
+@@ -96,9 +96,9 @@ i915_gem_batch_pool_get(struct i915_gem_batch_pool *pool,
+ 	list_for_each_entry(obj, list, batch_pool_link) {
+ 		/* The batches are strictly LRU ordered */
+ 		if (i915_gem_object_is_active(obj)) {
+-			struct reservation_object *resv = obj->resv;
++			struct dma_resv *resv = obj->resv;
+ 
+-			if (!reservation_object_test_signaled_rcu(resv, true))
++			if (!dma_resv_test_signaled_rcu(resv, true))
+ 				break;
+ 
+ 			i915_retire_requests(pool->engine->i915);
+@@ -113,13 +113,13 @@ i915_gem_batch_pool_get(struct i915_gem_batch_pool *pool,
+ 			 * than replace the existing fence.
+ 			 */
+ 			if (rcu_access_pointer(resv->fence)) {
+-				reservation_object_lock(resv, NULL);
+-				reservation_object_add_excl_fence(resv, NULL);
+-				reservation_object_unlock(resv);
++				dma_resv_lock(resv, NULL);
++				dma_resv_add_excl_fence(resv, NULL);
++				dma_resv_unlock(resv);
+ 			}
+ 		}
+ 
+-		GEM_BUG_ON(!reservation_object_test_signaled_rcu(obj->resv,
++		GEM_BUG_ON(!dma_resv_test_signaled_rcu(obj->resv,
+ 								 true));
+ 
+ 		if (obj->base.size >= size)
+diff --git a/drivers/gpu/drm/i915_legacy/i915_gem_clflush.c b/drivers/gpu/drm/i915_legacy/i915_gem_clflush.c
+index 8e74c23cbd91..152951903c60 100644
+--- a/drivers/gpu/drm/i915_legacy/i915_gem_clflush.c
++++ b/drivers/gpu/drm/i915_legacy/i915_gem_clflush.c
+@@ -162,9 +162,9 @@ bool i915_gem_clflush_object(struct drm_i915_gem_object *obj,
+ 						true, I915_FENCE_TIMEOUT,
+ 						I915_FENCE_GFP);
+ 
+-		reservation_object_lock(obj->resv, NULL);
+-		reservation_object_add_excl_fence(obj->resv, &clflush->dma);
+-		reservation_object_unlock(obj->resv);
++		dma_resv_lock(obj->resv, NULL);
++		dma_resv_add_excl_fence(obj->resv, &clflush->dma);
++		dma_resv_unlock(obj->resv);
+ 
+ 		i915_sw_fence_commit(&clflush->wait);
+ 	} else if (obj->mm.pages) {
+diff --git a/drivers/gpu/drm/i915_legacy/i915_gem_context.c b/drivers/gpu/drm/i915_legacy/i915_gem_context.c
+index dd728b26b5aa..fb5e2784d3c7 100644
+--- a/drivers/gpu/drm/i915_legacy/i915_gem_context.c
++++ b/drivers/gpu/drm/i915_legacy/i915_gem_context.c
+@@ -94,7 +94,6 @@
+ #include "intel_lrc_reg.h"
+ #include "intel_workarounds.h"
+ 
+-#define I915_CONTEXT_CREATE_FLAGS_SINGLE_TIMELINE (1 << 1)
+ #define I915_CONTEXT_PARAM_VM 0x9
+ 
+ #define ALL_L3_SLICES(dev) (1 << NUM_L3_SLICES(dev)) - 1
+@@ -415,8 +414,6 @@ i915_gem_create_context(struct drm_i915_private *dev_priv, unsigned int flags)
+ 
+ 	lockdep_assert_held(&dev_priv->drm.struct_mutex);
+ 
+-	BUILD_BUG_ON(I915_CONTEXT_CREATE_FLAGS_SINGLE_TIMELINE &
+-		     ~I915_CONTEXT_CREATE_FLAGS_UNKNOWN);
+ 	if (flags & I915_CONTEXT_CREATE_FLAGS_SINGLE_TIMELINE &&
+ 	    !HAS_EXECLISTS(dev_priv))
+ 		return ERR_PTR(-EINVAL);
+diff --git a/drivers/gpu/drm/i915_legacy/i915_gem_dmabuf.c b/drivers/gpu/drm/i915_legacy/i915_gem_dmabuf.c
+index 5a101a9462d8..daececd0f330 100644
+--- a/drivers/gpu/drm/i915_legacy/i915_gem_dmabuf.c
++++ b/drivers/gpu/drm/i915_legacy/i915_gem_dmabuf.c
+@@ -25,7 +25,7 @@
+  */
+ 
+ #include <linux/dma-buf.h>
+-#include <linux/reservation.h>
++#include <linux/dma-resv.h>
+ 
+ 
+ #include "i915_drv.h"
+@@ -224,8 +224,7 @@ static const struct dma_buf_ops i915_dmabuf_ops =  {
+ 	.end_cpu_access = i915_gem_end_cpu_access,
+ };
+ 
+-struct dma_buf *i915_gem_prime_export(struct drm_device *dev,
+-				      struct drm_gem_object *gem_obj, int flags)
++struct dma_buf *i915_gem_prime_export(struct drm_gem_object *gem_obj, int flags)
+ {
+ 	struct drm_i915_gem_object *obj = to_intel_bo(gem_obj);
+ 	DEFINE_DMA_BUF_EXPORT_INFO(exp_info);
+@@ -234,7 +233,7 @@ struct dma_buf *i915_gem_prime_export(struct drm_device *dev,
+ 	exp_info.size = gem_obj->size;
+ 	exp_info.flags = flags;
+ 	exp_info.priv = gem_obj;
+-	exp_info.resv = obj->resv;
++	exp_info.resv = obj->base.resv;
+ 
+ 	if (obj->ops->dmabuf_export) {
+ 		int ret = obj->ops->dmabuf_export(obj);
+@@ -242,7 +241,7 @@ struct dma_buf *i915_gem_prime_export(struct drm_device *dev,
+ 			return ERR_PTR(ret);
+ 	}
+ 
+-	return drm_gem_dmabuf_export(dev, &exp_info);
++	return drm_gem_dmabuf_export(gem_obj->dev, &exp_info);
+ }
+ 
+ static int i915_gem_object_get_pages_dmabuf(struct drm_i915_gem_object *obj)
+diff --git a/drivers/gpu/drm/i915_legacy/i915_gem_execbuffer.c b/drivers/gpu/drm/i915_legacy/i915_gem_execbuffer.c
+index c83d2a195d15..6993c01830cb 100644
+--- a/drivers/gpu/drm/i915_legacy/i915_gem_execbuffer.c
++++ b/drivers/gpu/drm/i915_legacy/i915_gem_execbuffer.c
+@@ -27,7 +27,7 @@
+  */
+ 
+ #include <linux/intel-iommu.h>
+-#include <linux/reservation.h>
++#include <linux/dma-resv.h>
+ #include <linux/sync_file.h>
+ #include <linux/uaccess.h>
+ 
+@@ -1243,7 +1243,7 @@ static int __reloc_gpu_alloc(struct i915_execbuffer *eb,
+ 	if (err)
+ 		goto err_request;
+ 
+-	GEM_BUG_ON(!reservation_object_test_signaled_rcu(batch->resv, true));
++	GEM_BUG_ON(!dma_resv_test_signaled_rcu(batch->resv, true));
+ 	err = i915_vma_move_to_active(batch, rq, 0);
+ 	if (err)
+ 		goto skip_request;
+@@ -1317,7 +1317,7 @@ relocate_entry(struct i915_vma *vma,
+ 
+ 	if (!eb->reloc_cache.vaddr &&
+ 	    (DBG_FORCE_RELOC == FORCE_GPU_RELOC ||
+-	     !reservation_object_test_signaled_rcu(vma->resv, true))) {
++	     !dma_resv_test_signaled_rcu(vma->resv, true))) {
+ 		const unsigned int gen = eb->reloc_cache.gen;
+ 		unsigned int len;
+ 		u32 *batch;
+diff --git a/drivers/gpu/drm/i915_legacy/i915_gem_object.h b/drivers/gpu/drm/i915_legacy/i915_gem_object.h
+index ca93a40c0c87..9ad63c9a552a 100644
+--- a/drivers/gpu/drm/i915_legacy/i915_gem_object.h
++++ b/drivers/gpu/drm/i915_legacy/i915_gem_object.h
+@@ -25,7 +25,7 @@
+ #ifndef __I915_GEM_OBJECT_H__
+ #define __I915_GEM_OBJECT_H__
+ 
+-#include <linux/reservation.h>
++#include <linux/dma-resv.h>
+ 
+ #include <drm/drm_vma_manager.h>
+ #include <drm/drm_gem.h>
+@@ -267,7 +267,7 @@ struct drm_i915_gem_object {
+ 	 * read request. This allows for the CPU to read from an active
+ 	 * buffer by only waiting for the write to complete.
+ 	 */
+-	struct reservation_object *resv;
++	struct dma_resv *resv;
+ 
+ 	/** References from framebuffers, locks out tiling changes. */
+ 	unsigned int framebuffer_references;
+@@ -292,7 +292,7 @@ struct drm_i915_gem_object {
+ 	/** for phys allocated objects */
+ 	struct drm_dma_handle *phys_handle;
+ 
+-	struct reservation_object __builtin_resv;
++	struct dma_resv __builtin_resv;
+ };
+ 
+ static inline struct drm_i915_gem_object *
+@@ -362,12 +362,12 @@ i915_gem_object_put(struct drm_i915_gem_object *obj)
+ 
+ static inline void i915_gem_object_lock(struct drm_i915_gem_object *obj)
+ {
+-	reservation_object_lock(obj->resv, NULL);
++	dma_resv_lock(obj->resv, NULL);
+ }
+ 
+ static inline void i915_gem_object_unlock(struct drm_i915_gem_object *obj)
+ {
+-	reservation_object_unlock(obj->resv);
++	dma_resv_unlock(obj->resv);
+ }
+ 
+ static inline void
+@@ -488,7 +488,7 @@ i915_gem_object_last_write_engine(struct drm_i915_gem_object *obj)
+ 	struct dma_fence *fence;
+ 
+ 	rcu_read_lock();
+-	fence = reservation_object_get_excl_rcu(obj->resv);
++	fence = dma_resv_get_excl_rcu(obj->resv);
+ 	rcu_read_unlock();
+ 
+ 	if (fence && dma_fence_is_i915(fence) && !dma_fence_is_signaled(fence))
+diff --git a/drivers/gpu/drm/i915_legacy/i915_mm.c b/drivers/gpu/drm/i915_legacy/i915_mm.c
+index e4935dd1fd37..c23bb29e6d3e 100644
+--- a/drivers/gpu/drm/i915_legacy/i915_mm.c
++++ b/drivers/gpu/drm/i915_legacy/i915_mm.c
+@@ -35,8 +35,7 @@ struct remap_pfn {
+ 	pgprot_t prot;
+ };
+ 
+-static int remap_pfn(pte_t *pte, pgtable_t token,
+-		     unsigned long addr, void *data)
++static int remap_pfn(pte_t *pte, unsigned long addr, void *data)
+ {
+ 	struct remap_pfn *r = data;
+ 
+diff --git a/drivers/gpu/drm/i915_legacy/i915_request.c b/drivers/gpu/drm/i915_legacy/i915_request.c
+index 81b48e273cbd..df080d515316 100644
+--- a/drivers/gpu/drm/i915_legacy/i915_request.c
++++ b/drivers/gpu/drm/i915_legacy/i915_request.c
+@@ -1023,7 +1023,7 @@ i915_request_await_object(struct i915_request *to,
+ 		struct dma_fence **shared;
+ 		unsigned int count, i;
+ 
+-		ret = reservation_object_get_fences_rcu(obj->resv,
++		ret = dma_resv_get_fences_rcu(obj->resv,
+ 							&excl, &count, &shared);
+ 		if (ret)
+ 			return ret;
+@@ -1040,7 +1040,7 @@ i915_request_await_object(struct i915_request *to,
+ 			dma_fence_put(shared[i]);
+ 		kfree(shared);
+ 	} else {
+-		excl = reservation_object_get_excl_rcu(obj->resv);
++		excl = dma_resv_get_excl_rcu(obj->resv);
+ 	}
+ 
+ 	if (excl) {
+diff --git a/drivers/gpu/drm/i915_legacy/i915_sw_fence.c b/drivers/gpu/drm/i915_legacy/i915_sw_fence.c
+index 5387aafd3424..362e4e00b4c6 100644
+--- a/drivers/gpu/drm/i915_legacy/i915_sw_fence.c
++++ b/drivers/gpu/drm/i915_legacy/i915_sw_fence.c
+@@ -7,7 +7,7 @@
+ #include <linux/slab.h>
+ #include <linux/dma-fence.h>
+ #include <linux/irq_work.h>
+-#include <linux/reservation.h>
++#include <linux/dma-resv.h>
+ 
+ #include "i915_sw_fence.h"
+ #include "i915_selftest.h"
+@@ -510,7 +510,7 @@ int __i915_sw_fence_await_dma_fence(struct i915_sw_fence *fence,
+ }
+ 
+ int i915_sw_fence_await_reservation(struct i915_sw_fence *fence,
+-				    struct reservation_object *resv,
++				    struct dma_resv *resv,
+ 				    const struct dma_fence_ops *exclude,
+ 				    bool write,
+ 				    unsigned long timeout,
+@@ -526,7 +526,7 @@ int i915_sw_fence_await_reservation(struct i915_sw_fence *fence,
+ 		struct dma_fence **shared;
+ 		unsigned int count, i;
+ 
+-		ret = reservation_object_get_fences_rcu(resv,
++		ret = dma_resv_get_fences_rcu(resv,
+ 							&excl, &count, &shared);
+ 		if (ret)
+ 			return ret;
+@@ -551,7 +551,7 @@ int i915_sw_fence_await_reservation(struct i915_sw_fence *fence,
+ 			dma_fence_put(shared[i]);
+ 		kfree(shared);
+ 	} else {
+-		excl = reservation_object_get_excl_rcu(resv);
++		excl = dma_resv_get_excl_rcu(resv);
+ 	}
+ 
+ 	if (ret >= 0 && excl && excl->ops != exclude) {
+diff --git a/drivers/gpu/drm/i915_legacy/i915_sw_fence.h b/drivers/gpu/drm/i915_legacy/i915_sw_fence.h
+index 9cb5c3b307a6..8cf353e8c3e0 100644
+--- a/drivers/gpu/drm/i915_legacy/i915_sw_fence.h
++++ b/drivers/gpu/drm/i915_legacy/i915_sw_fence.h
+@@ -16,7 +16,7 @@
+ #include <linux/wait.h>
+ 
+ struct completion;
+-struct reservation_object;
++struct dma_resv;
+ 
+ struct i915_sw_fence {
+ 	wait_queue_head_t wait;
+@@ -82,7 +82,7 @@ int i915_sw_fence_await_dma_fence(struct i915_sw_fence *fence,
+ 				  gfp_t gfp);
+ 
+ int i915_sw_fence_await_reservation(struct i915_sw_fence *fence,
+-				    struct reservation_object *resv,
++				    struct dma_resv *resv,
+ 				    const struct dma_fence_ops *exclude,
+ 				    bool write,
+ 				    unsigned long timeout,
+diff --git a/drivers/gpu/drm/i915_legacy/i915_trace.h b/drivers/gpu/drm/i915_legacy/i915_trace.h
+index 12893304c8f8..ca379eaa3537 100644
+--- a/drivers/gpu/drm/i915_legacy/i915_trace.h
++++ b/drivers/gpu/drm/i915_legacy/i915_trace.h
+@@ -996,5 +996,5 @@ DEFINE_EVENT(i915_context, i915_context_free,
+ 
+ /* This part must be outside protection */
+ #undef TRACE_INCLUDE_PATH
+-#define TRACE_INCLUDE_PATH ../../drivers/gpu/drm/i915
++#define TRACE_INCLUDE_PATH ../../drivers/gpu/drm/i915_legacy
+ #include <trace/define_trace.h>
+diff --git a/drivers/gpu/drm/i915_legacy/i915_vma.c b/drivers/gpu/drm/i915_legacy/i915_vma.c
+index 961268f66c63..14edba4b2e67 100644
+--- a/drivers/gpu/drm/i915_legacy/i915_vma.c
++++ b/drivers/gpu/drm/i915_legacy/i915_vma.c
+@@ -98,10 +98,10 @@ static void __i915_vma_retire(struct i915_active *ref)
+ 		return;
+ 
+ 	/* Prune the shared fence arrays iff completely idle (inc. external) */
+-	if (reservation_object_trylock(obj->resv)) {
+-		if (reservation_object_test_signaled_rcu(obj->resv, true))
+-			reservation_object_add_excl_fence(obj->resv, NULL);
+-		reservation_object_unlock(obj->resv);
++	if (dma_resv_trylock(obj->resv)) {
++		if (dma_resv_test_signaled_rcu(obj->resv, true))
++			dma_resv_add_excl_fence(obj->resv, NULL);
++		dma_resv_unlock(obj->resv);
+ 	}
+ 
+ 	/*
+@@ -904,19 +904,19 @@ static void export_fence(struct i915_vma *vma,
+ 			 struct i915_request *rq,
+ 			 unsigned int flags)
+ {
+-	struct reservation_object *resv = vma->resv;
++	struct dma_resv *resv = vma->resv;
+ 
+ 	/*
+ 	 * Ignore errors from failing to allocate the new fence, we can't
+ 	 * handle an error right now. Worst case should be missed
+ 	 * synchronisation leading to rendering corruption.
+ 	 */
+-	reservation_object_lock(resv, NULL);
++	dma_resv_lock(resv, NULL);
+ 	if (flags & EXEC_OBJECT_WRITE)
+-		reservation_object_add_excl_fence(resv, &rq->fence);
+-	else if (reservation_object_reserve_shared(resv, 1) == 0)
+-		reservation_object_add_shared_fence(resv, &rq->fence);
+-	reservation_object_unlock(resv);
++		dma_resv_add_excl_fence(resv, &rq->fence);
++	else if (dma_resv_reserve_shared(resv, 1) == 0)
++		dma_resv_add_shared_fence(resv, &rq->fence);
++	dma_resv_unlock(resv);
+ }
+ 
+ int i915_vma_move_to_active(struct i915_vma *vma,
+diff --git a/drivers/gpu/drm/i915_legacy/i915_vma.h b/drivers/gpu/drm/i915_legacy/i915_vma.h
+index 6eab70953a57..a319480d890c 100644
+--- a/drivers/gpu/drm/i915_legacy/i915_vma.h
++++ b/drivers/gpu/drm/i915_legacy/i915_vma.h
+@@ -53,7 +53,7 @@ struct i915_vma {
+ 	struct i915_address_space *vm;
+ 	const struct i915_vma_ops *ops;
+ 	struct drm_i915_fence_reg *fence;
+-	struct reservation_object *resv; /** Alias of obj->resv */
++	struct dma_resv *resv; /** Alias of obj->resv */
+ 	struct sg_table *pages;
+ 	void __iomem *iomap;
+ 	void *private; /* owned by creator */
+diff --git a/drivers/gpu/drm/i915_legacy/intel_atomic.c b/drivers/gpu/drm/i915_legacy/intel_atomic.c
+index 8c8fae32ec50..2986ee1dbf62 100644
+--- a/drivers/gpu/drm/i915_legacy/intel_atomic.c
++++ b/drivers/gpu/drm/i915_legacy/intel_atomic.c
+@@ -104,13 +104,26 @@ int intel_digital_connector_atomic_set_property(struct drm_connector *connector,
+ 	return -EINVAL;
+ }
+ 
++
++static bool blob_equal(const struct drm_property_blob *a,
++		       const struct drm_property_blob *b)
++{
++	if (a && b)
++		return a->length == b->length &&
++			!memcmp(a->data, b->data, a->length);
++
++	return !a == !b;
++}
++
+ int intel_digital_connector_atomic_check(struct drm_connector *conn,
+-					 struct drm_connector_state *new_state)
++					 struct drm_atomic_state *state)
+ {
++	struct drm_connector_state *new_state =
++		drm_atomic_get_new_connector_state(state, conn);
+ 	struct intel_digital_connector_state *new_conn_state =
+ 		to_intel_digital_connector_state(new_state);
+ 	struct drm_connector_state *old_state =
+-		drm_atomic_get_old_connector_state(new_state->state, conn);
++		drm_atomic_get_old_connector_state(state, conn);
+ 	struct intel_digital_connector_state *old_conn_state =
+ 		to_intel_digital_connector_state(old_state);
+ 	struct drm_crtc_state *crtc_state;
+@@ -120,7 +133,7 @@ int intel_digital_connector_atomic_check(struct drm_connector *conn,
+ 	if (!new_state->crtc)
+ 		return 0;
+ 
+-	crtc_state = drm_atomic_get_new_crtc_state(new_state->state, new_state->crtc);
++	crtc_state = drm_atomic_get_new_crtc_state(state, new_state->crtc);
+ 
+ 	/*
+ 	 * These properties are handled by fastset, and might not end
+@@ -131,7 +144,9 @@ int intel_digital_connector_atomic_check(struct drm_connector *conn,
+ 	    new_conn_state->base.colorspace != old_conn_state->base.colorspace ||
+ 	    new_conn_state->base.picture_aspect_ratio != old_conn_state->base.picture_aspect_ratio ||
+ 	    new_conn_state->base.content_type != old_conn_state->base.content_type ||
+-	    new_conn_state->base.scaling_mode != old_conn_state->base.scaling_mode)
++	    new_conn_state->base.scaling_mode != old_conn_state->base.scaling_mode ||
++	    !blob_equal(new_conn_state->base.hdr_output_metadata,
++			old_conn_state->base.hdr_output_metadata))
+ 		crtc_state->mode_changed = true;
+ 
+ 	return 0;
+diff --git a/drivers/gpu/drm/i915_legacy/intel_display.c b/drivers/gpu/drm/i915_legacy/intel_display.c
+index 75105a2c59ea..9a8013d2f0c4 100644
+--- a/drivers/gpu/drm/i915_legacy/intel_display.c
++++ b/drivers/gpu/drm/i915_legacy/intel_display.c
+@@ -29,7 +29,7 @@
+ #include <linux/intel-iommu.h>
+ #include <linux/kernel.h>
+ #include <linux/module.h>
+-#include <linux/reservation.h>
++#include <linux/dma-resv.h>
+ #include <linux/slab.h>
+ #include <linux/vgaarb.h>
+ 
+@@ -14016,7 +14016,7 @@ intel_prepare_plane_fb(struct drm_plane *plane,
+ 		if (ret < 0)
+ 			return ret;
+ 
+-		fence = reservation_object_get_excl_rcu(obj->resv);
++		fence = dma_resv_get_excl_rcu(obj->resv);
+ 		if (fence) {
+ 			add_rps_boost_after_vblank(new_state->crtc, fence);
+ 			dma_fence_put(fence);
+diff --git a/drivers/gpu/drm/i915_legacy/intel_dp_mst.c b/drivers/gpu/drm/i915_legacy/intel_dp_mst.c
+index 8e6a7b8dffca..ffdc80bfde15 100644
+--- a/drivers/gpu/drm/i915_legacy/intel_dp_mst.c
++++ b/drivers/gpu/drm/i915_legacy/intel_dp_mst.c
+@@ -156,9 +156,10 @@ static int intel_dp_mst_compute_config(struct intel_encoder *encoder,
+ 
+ static int
+ intel_dp_mst_atomic_check(struct drm_connector *connector,
+-			  struct drm_connector_state *new_conn_state)
++			  struct drm_atomic_state *state)
+ {
+-	struct drm_atomic_state *state = new_conn_state->state;
++	struct drm_connector_state *new_conn_state =
++		drm_atomic_get_new_connector_state(state, connector);
+ 	struct drm_connector_state *old_conn_state =
+ 		drm_atomic_get_old_connector_state(state, connector);
+ 	struct intel_connector *intel_connector =
+@@ -168,7 +169,7 @@ intel_dp_mst_atomic_check(struct drm_connector *connector,
+ 	struct drm_dp_mst_topology_mgr *mgr;
+ 	int ret;
+ 
+-	ret = intel_digital_connector_atomic_check(connector, new_conn_state);
++	ret = intel_digital_connector_atomic_check(connector, state);
+ 	if (ret)
+ 		return ret;
+ 
+diff --git a/drivers/gpu/drm/i915_legacy/intel_drv.h b/drivers/gpu/drm/i915_legacy/intel_drv.h
+index e85cd377a652..2db759e8e454 100644
+--- a/drivers/gpu/drm/i915_legacy/intel_drv.h
++++ b/drivers/gpu/drm/i915_legacy/intel_drv.h
+@@ -2016,7 +2016,7 @@ int intel_digital_connector_atomic_set_property(struct drm_connector *connector,
+ 						struct drm_property *property,
+ 						u64 val);
+ int intel_digital_connector_atomic_check(struct drm_connector *conn,
+-					 struct drm_connector_state *new_state);
++					 struct drm_atomic_state *state);
+ struct drm_connector_state *
+ intel_digital_connector_duplicate_state(struct drm_connector *connector);
+ 
+diff --git a/drivers/gpu/drm/i915_legacy/intel_hdcp.c b/drivers/gpu/drm/i915_legacy/intel_hdcp.c
+index 99b007169c49..38b7f1de8591 100644
+--- a/drivers/gpu/drm/i915_legacy/intel_hdcp.c
++++ b/drivers/gpu/drm/i915_legacy/intel_hdcp.c
+@@ -1306,7 +1306,7 @@ int hdcp2_propagate_stream_management_info(struct intel_connector *connector)
+ 
+ 	/* Prepare RepeaterAuth_Stream_Manage msg */
+ 	msgs.stream_manage.msg_id = HDCP_2_2_REP_STREAM_MANAGE;
+-	drm_hdcp2_u32_to_seq_num(msgs.stream_manage.seq_num_m, hdcp->seq_num_m);
++	drm_hdcp_cpu_to_be24(msgs.stream_manage.seq_num_m, hdcp->seq_num_m);
+ 
+ 	/* K no of streams is fixed as 1. Stored as big-endian. */
+ 	msgs.stream_manage.k = cpu_to_be16(1);
+@@ -1371,7 +1371,8 @@ int hdcp2_authenticate_repeater_topology(struct intel_connector *connector)
+ 	}
+ 
+ 	/* Converting and Storing the seq_num_v to local variable as DWORD */
+-	seq_num_v = drm_hdcp2_seq_num_to_u32(msgs.recvid_list.seq_num_v);
++	seq_num_v =
++		drm_hdcp_be24_to_cpu((const u8 *)msgs.recvid_list.seq_num_v);
+ 
+ 	if (seq_num_v < hdcp->seq_num_v) {
+ 		/* Roll over of the seq_num_v from repeater. Reauthenticate. */
+@@ -1798,7 +1799,9 @@ int intel_hdcp_init(struct intel_connector *connector,
+ 	if (!shim)
+ 		return -EINVAL;
+ 
+-	ret = drm_connector_attach_content_protection_property(&connector->base);
++	ret =
++	drm_connector_attach_content_protection_property(&connector->base,
++							 hdcp->hdcp2_supported);
+ 	if (ret)
+ 		return ret;
+ 
+diff --git a/drivers/gpu/drm/i915_legacy/intel_psr.c b/drivers/gpu/drm/i915_legacy/intel_psr.c
+index 963663ba0edf..23ae9693426b 100644
+--- a/drivers/gpu/drm/i915_legacy/intel_psr.c
++++ b/drivers/gpu/drm/i915_legacy/intel_psr.c
+@@ -352,7 +352,7 @@ static void intel_psr_setup_vsc(struct intel_dp *intel_dp,
+ {
+ 	struct intel_digital_port *intel_dig_port = dp_to_dig_port(intel_dp);
+ 	struct drm_i915_private *dev_priv = dp_to_i915(intel_dp);
+-	struct edp_vsc_psr psr_vsc;
++	struct dp_sdp psr_vsc;
+ 
+ 	if (dev_priv->psr.psr2_enabled) {
+ 		/* Prepare VSC Header for SU as per EDP 1.4 spec, Table 6.11 */
+diff --git a/drivers/gpu/drm/i915_legacy/intel_sdvo.c b/drivers/gpu/drm/i915_legacy/intel_sdvo.c
+index 9ecfba0a54a1..f8d938108913 100644
+--- a/drivers/gpu/drm/i915_legacy/intel_sdvo.c
++++ b/drivers/gpu/drm/i915_legacy/intel_sdvo.c
+@@ -2388,9 +2388,10 @@ static const struct drm_connector_funcs intel_sdvo_connector_funcs = {
+ };
+ 
+ static int intel_sdvo_atomic_check(struct drm_connector *conn,
+-				   struct drm_connector_state *new_conn_state)
++				   struct drm_atomic_state *state)
+ {
+-	struct drm_atomic_state *state = new_conn_state->state;
++	struct drm_connector_state *new_conn_state =
++		drm_atomic_get_new_connector_state(state, conn);
+ 	struct drm_connector_state *old_conn_state =
+ 		drm_atomic_get_old_connector_state(state, conn);
+ 	struct intel_sdvo_connector_state *old_state =
+@@ -2402,13 +2403,13 @@ static int intel_sdvo_atomic_check(struct drm_connector *conn,
+ 	    (memcmp(&old_state->tv, &new_state->tv, sizeof(old_state->tv)) ||
+ 	     memcmp(&old_conn_state->tv, &new_conn_state->tv, sizeof(old_conn_state->tv)))) {
+ 		struct drm_crtc_state *crtc_state =
+-			drm_atomic_get_new_crtc_state(new_conn_state->state,
++			drm_atomic_get_new_crtc_state(state,
+ 						      new_conn_state->crtc);
+ 
+ 		crtc_state->connectors_changed = true;
+ 	}
+ 
+-	return intel_digital_connector_atomic_check(conn, new_conn_state);
++	return intel_digital_connector_atomic_check(conn, state);
+ }
+ 
+ static const struct drm_connector_helper_funcs intel_sdvo_connector_helper_funcs = {
+diff --git a/drivers/gpu/drm/i915_legacy/intel_sprite.c b/drivers/gpu/drm/i915_legacy/intel_sprite.c
+index 2913e89280d7..c1647c0cc217 100644
+--- a/drivers/gpu/drm/i915_legacy/intel_sprite.c
++++ b/drivers/gpu/drm/i915_legacy/intel_sprite.c
+@@ -325,7 +325,8 @@ skl_plane_max_stride(struct intel_plane *plane,
+ 		     u32 pixel_format, u64 modifier,
+ 		     unsigned int rotation)
+ {
+-	int cpp = drm_format_plane_cpp(pixel_format, 0);
++	const struct drm_format_info *info = drm_format_info(pixel_format);
++	int cpp = info->cpp[0];
+ 
+ 	/*
+ 	 * "The stride in bytes must not exceed the
+diff --git a/drivers/gpu/drm/i915_legacy/intel_tv.c b/drivers/gpu/drm/i915_legacy/intel_tv.c
+index 5dbba33f4202..a7c089c3414e 100644
+--- a/drivers/gpu/drm/i915_legacy/intel_tv.c
++++ b/drivers/gpu/drm/i915_legacy/intel_tv.c
+@@ -1820,16 +1820,18 @@ static const struct drm_connector_funcs intel_tv_connector_funcs = {
+ };
+ 
+ static int intel_tv_atomic_check(struct drm_connector *connector,
+-				 struct drm_connector_state *new_state)
++				 struct drm_atomic_state *state)
+ {
++	struct drm_connector_state *new_state;
+ 	struct drm_crtc_state *new_crtc_state;
+ 	struct drm_connector_state *old_state;
+ 
++	new_state = drm_atomic_get_new_connector_state(state, connector);
+ 	if (!new_state->crtc)
+ 		return 0;
+ 
+-	old_state = drm_atomic_get_old_connector_state(new_state->state, connector);
+-	new_crtc_state = drm_atomic_get_new_crtc_state(new_state->state, new_state->crtc);
++	old_state = drm_atomic_get_old_connector_state(state, connector);
++	new_crtc_state = drm_atomic_get_new_crtc_state(state, new_state->crtc);
+ 
+ 	if (old_state->tv.mode != new_state->tv.mode ||
+ 	    old_state->tv.margins.left != new_state->tv.margins.left ||
+diff --git a/drivers/gpu/drm/i915_legacy/selftests/i915_gem_dmabuf.c b/drivers/gpu/drm/i915_legacy/selftests/i915_gem_dmabuf.c
+index 2b943ee246c9..84eb978fe39f 100644
+--- a/drivers/gpu/drm/i915_legacy/selftests/i915_gem_dmabuf.c
++++ b/drivers/gpu/drm/i915_legacy/selftests/i915_gem_dmabuf.c
+@@ -37,7 +37,7 @@ static int igt_dmabuf_export(void *arg)
+ 	if (IS_ERR(obj))
+ 		return PTR_ERR(obj);
+ 
+-	dmabuf = i915_gem_prime_export(&i915->drm, &obj->base, 0);
++	dmabuf = i915_gem_prime_export(&obj->base, 0);
+ 	i915_gem_object_put(obj);
+ 	if (IS_ERR(dmabuf)) {
+ 		pr_err("i915_gem_prime_export failed with err=%d\n",
+@@ -61,7 +61,7 @@ static int igt_dmabuf_import_self(void *arg)
+ 	if (IS_ERR(obj))
+ 		return PTR_ERR(obj);
+ 
+-	dmabuf = i915_gem_prime_export(&i915->drm, &obj->base, 0);
++	dmabuf = i915_gem_prime_export(&obj->base, 0);
+ 	if (IS_ERR(dmabuf)) {
+ 		pr_err("i915_gem_prime_export failed with err=%d\n",
+ 		       (int)PTR_ERR(dmabuf));
+@@ -236,7 +236,7 @@ static int igt_dmabuf_export_vmap(void *arg)
+ 	if (IS_ERR(obj))
+ 		return PTR_ERR(obj);
+ 
+-	dmabuf = i915_gem_prime_export(&i915->drm, &obj->base, 0);
++	dmabuf = i915_gem_prime_export(&obj->base, 0);
+ 	if (IS_ERR(dmabuf)) {
+ 		pr_err("i915_gem_prime_export failed with err=%d\n",
+ 		       (int)PTR_ERR(dmabuf));
+@@ -283,7 +283,7 @@ static int igt_dmabuf_export_kmap(void *arg)
+ 	if (IS_ERR(obj))
+ 		return PTR_ERR(obj);
+ 
+-	dmabuf = i915_gem_prime_export(&i915->drm, &obj->base, 0);
++	dmabuf = i915_gem_prime_export(&obj->base, 0);
+ 	i915_gem_object_put(obj);
+ 	if (IS_ERR(dmabuf)) {
+ 		err = PTR_ERR(dmabuf);
+-- 
+2.23.0
+
