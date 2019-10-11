@@ -1,9 +1,9 @@
-From e2f90dca69efb543405f09b9df290f1d30a18b71 Mon Sep 17 00:00:00 2001
+From a92e6e34309bbd197ee1f57debb7a1d2ce5eb2b7 Mon Sep 17 00:00:00 2001
 From: Dorian Stoll <dorian.stoll@tmsp.io>
 Date: Fri, 4 Oct 2019 15:55:46 +0200
 Subject: [PATCH 2/2] Integrate i915_legacy
 
-Based on (upstream): 5.4-rc1
+Based on (upstream): 5.4-rc2
 
 Signed-off-by: Dorian Stoll <dorian.stoll@tmsp.io>
 ---
